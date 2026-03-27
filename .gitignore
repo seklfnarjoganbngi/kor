@@ -1,0 +1,4 @@
+.env
+kordle_rank.db
+__pycache__/
+*.pyc

@@ -8,7 +8,7 @@ from typing import Optional
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from flask import Flask
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 load_dotenv()
 
@@ -35,7 +35,21 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-app = Flask(__name__)
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_web():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    print(f"HTTP server running on 0.0.0.0:{PORT}")
+    server.serve_forever()
 
 
 @app.route("/")

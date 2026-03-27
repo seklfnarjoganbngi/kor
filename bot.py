@@ -1,11 +1,14 @@
 import os
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from flask import Flask
 
 load_dotenv()
 
@@ -19,6 +22,7 @@ if not guild_id_raw:
 
 GUILD_ID = int(guild_id_raw)
 TOP_ROLE_NAME = os.getenv("TOP_ROLE_NAME", "꼬들 킹")
+PORT = int(os.getenv("PORT", 10000))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "kordle_rank.db")
@@ -30,6 +34,22 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "Bot is running!", 200
+
+
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
+
+def run_web():
+    app.run(host="0.0.0.0", port=PORT)
 
 
 def now_kst() -> datetime:
@@ -62,6 +82,53 @@ def get_period_bounds(period_key: str):
     start_date = base_date + timedelta(days=period_index * 3)
     end_date = start_date + timedelta(days=2)
     return start_date, end_date
+
+
+def get_period_reset_datetime(period_key: str) -> datetime:
+    # 해당 시즌 종료 다음날 00:00 KST
+    _, end_date = get_period_bounds(period_key)
+    reset_date = end_date + timedelta(days=1)
+    return datetime.combine(reset_date, datetime.min.time(), tzinfo=KST)
+
+
+def format_remaining(delta: timedelta) -> str:
+    total_seconds = int(delta.total_seconds())
+    if total_seconds <= 0:
+        return "곧 초기화됨"
+
+    days, rem = divmod(total_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+
+    parts = []
+    if days > 0:
+        parts.append(f"{days}일")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours}시간")
+    if minutes > 0 or hours > 0 or days > 0:
+        parts.append(f"{minutes}분")
+    parts.append(f"{seconds}초")
+    return " ".join(parts)
+
+
+def get_wipe_status_text() -> str:
+    period_key = get_current_period_key()
+    start_date, end_date = get_period_bounds(period_key)
+    now = now_kst()
+    reset_at = get_period_reset_datetime(period_key)
+    remaining = reset_at - now
+
+    return "\n".join(
+        [
+            "```",
+            "[시즌 초기화 정보]",
+            f"현재 시즌: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}",
+            f"초기화 시각: {reset_at.strftime('%Y-%m-%d %H:%M:%S KST')}",
+            f"현재 시각: {now.strftime('%Y-%m-%d %H:%M:%S KST')}",
+            f"남은 시간: {format_remaining(remaining)}",
+            "```",
+        ]
+    )
 
 
 def get_conn() -> sqlite3.Connection:
@@ -151,7 +218,7 @@ def parse_kordle_message(content: str):
         counts = count_tokens_in_line(line)
         total = counts["yellow"] + counts["green"] + counts["white"]
 
-        # 보드 줄은 최소 4칸 이상이어야 인정
+        # 보드 줄은 최소 4칸 이상
         if total >= 4:
             board_lines.append(
                 {
@@ -173,6 +240,7 @@ def parse_kordle_message(content: str):
     total_green = sum(line["green"] for line in board_lines)
     total_white = sum(line["white"] for line in board_lines)
 
+    # 점수 규칙: 노랑 1점, 초록 2점
     score = total_yellow + (total_green * 2)
 
     success_attempt = None
@@ -396,7 +464,7 @@ def get_period_user_rank(guild_id: int, user_id: int, period_key: str):
     return None, None
 
 
-async def apply_king_role(guild: discord.Guild, winner_user_id: int | None):
+async def apply_king_role(guild: discord.Guild, winner_user_id: Optional[int]):
     role = discord.utils.get(guild.roles, name=TOP_ROLE_NAME)
     if role is None:
         return False, f"'{TOP_ROLE_NAME}' 역할 없음"
@@ -439,7 +507,7 @@ async def apply_king_role(guild: discord.Guild, winner_user_id: int | None):
 
 async def finalize_previous_period_if_needed(
     guild: discord.Guild,
-    announce_channel: discord.abc.Messageable | None = None
+    announce_channel: Optional[discord.abc.Messageable] = None
 ):
     current_period = get_current_period_key()
     last_seen_period = get_meta(guild.id, "current_period")
@@ -467,7 +535,14 @@ async def finalize_previous_period_if_needed(
 
     await apply_king_role(guild, winner_id)
 
-    text = f"이번 사흘 간 꼬들 킹은 {winner_name}"
+    start_date, end_date = get_period_bounds(previous_period)
+    text = (
+        "```"
+        f"\n[시즌 종료]"
+        f"\n기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+        f"\n이번 사흘 간 꼬들 킹: {winner_name}"
+        "\n```"
+    )
 
     if announce_channel is not None:
         try:
@@ -525,17 +600,33 @@ async def rank_command(ctx: commands.Context):
     await finalize_previous_period_if_needed(guild, ctx.channel)
 
     period_key = get_current_period_key()
+    start_date, end_date = get_period_bounds(period_key)
     rows = get_period_leaderboard(guild.id, period_key, 10)
 
     if not rows:
         await ctx.reply("현재 3일 시즌 기록이 없어.", mention_author=False)
         return
 
-    lines = []
-    for i, row in enumerate(rows, start=1):
-        lines.append(f"{i}위 | {row['username']} | {row['total_score']}점")
+    medal = {
+        1: "🥇",
+        2: "🥈",
+        3: "🥉",
+    }
 
-    await ctx.reply("[현재 3일 시즌 순위]\n" + "\n".join(lines), mention_author=False)
+    lines = [
+        "```",
+        f"[현재 3일 시즌 순위] {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}",
+    ]
+
+    for i, row in enumerate(rows, start=1):
+        icon = medal.get(i, f"{i}위")
+        avg = row["avg_success_attempt"] if row["avg_success_attempt"] is not None else "-"
+        lines.append(
+            f"{icon} | {row['username']} | {row['total_score']}점 | 성공 {row['success_count']}회 | 실패 {row['fail_count']}회 | 평균 {avg}"
+        )
+
+    lines.append("```")
+    await ctx.reply("\n".join(lines), mention_author=False)
 
 
 @bot.command(name="내점수")
@@ -559,16 +650,43 @@ async def my_score_command(ctx: commands.Context):
     await ctx.reply(
         "\n".join(
             [
+                "```",
                 f"[{ctx.author.display_name} 현재 시즌 기록]",
-                f"- 순위: {rank}위",
-                f"- 시즌 점수: {row['total_score']}점",
-                f"- 노랑: {row['total_yellow']}개",
-                f"- 초록: {row['total_green']}개",
-                f"- 흰칸: {row['total_white']}개",
-                f"- 성공: {row['success_count']}회",
-                f"- 실패: {row['fail_count']}회",
-                f"- 총 제출: {row['total_submissions']}회",
-                f"- 평균 성공 시도: {avg}",
+                f"순위: {rank}위",
+                f"시즌 점수: {row['total_score']}점",
+                f"성공: {row['success_count']}회",
+                f"실패: {row['fail_count']}회",
+                f"총 제출: {row['total_submissions']}회",
+                f"평균 성공 시도: {avg}",
+                "```",
+            ]
+        ),
+        mention_author=False,
+    )
+
+
+@bot.command(name="wipe")
+async def wipe_command(ctx: commands.Context):
+    guild = ctx.guild
+    if guild is None:
+        await ctx.reply("서버에서만 사용할 수 있어.", mention_author=False)
+        return
+
+    await finalize_previous_period_if_needed(guild, ctx.channel)
+    await ctx.reply(get_wipe_status_text(), mention_author=False)
+
+
+@bot.command(name="도움말")
+async def help_command(ctx: commands.Context):
+    await ctx.reply(
+        "\n".join(
+            [
+                "```",
+                "[명령어 목록]",
+                "!순위   - 현재 3일 시즌 랭킹",
+                "!내점수 - 내 현재 시즌 기록",
+                "!wipe   - 시즌 초기화까지 남은 시간",
+                "```",
             ]
         ),
         mention_author=False,
@@ -607,6 +725,7 @@ async def on_message(message: discord.Message):
 
 def main():
     init_db()
+    threading.Thread(target=run_web, daemon=True).start()
     bot.run(TOKEN)
 
 

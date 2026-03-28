@@ -702,28 +702,16 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_ready():
-    print("DB 위치:", DB_PATH)
-    print(f"{bot.user} 로그인 완료")
-
-    guild = bot.get_guild(GUILD_ID)
-    if guild:
-        print(f"대상 서버: {guild.name}")
-        announce_channel = guild.system_channel
-        await finalize_previous_period_if_needed(guild, announce_channel)
-    else:
-        print("GUILD_ID에 해당하는 서버를 찾지 못함")
-
-
-@bot.event
-async def on_ready():
+    print("DB 위치:", DB_PATH, flush=True)
     print(f"{bot.user} 로그인 완료", flush=True)
 
     guild = bot.get_guild(GUILD_ID)
     if guild:
         print(f"대상 서버: {guild.name}", flush=True)
+        announce_channel = guild.system_channel
+        await finalize_previous_period_if_needed(guild, announce_channel)
     else:
         print("GUILD_ID에 해당하는 서버를 찾지 못함", flush=True)
-
 
 async def main():
     print("main() 시작", flush=True)

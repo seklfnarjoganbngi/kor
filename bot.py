@@ -692,6 +692,13 @@ async def test_king(ctx):
     success, msg = await apply_king_role(guild, ctx.author.id)
     await ctx.reply(f"테스트 결과: {msg}")
 
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    await handle_auto_collect(message)
+    await bot.process_commands(message)
 
 @bot.event
 async def on_ready():

@@ -580,7 +580,7 @@ async def handle_auto_collect(message: discord.Message) -> None:
     )
 
     try:
-        await message.reply("점수 반영", mention_author=False)
+        await message.reply("점수가 반영되었사옵니다.", mention_author=False)
     except discord.HTTPException:
         pass
 
@@ -589,7 +589,7 @@ async def handle_auto_collect(message: discord.Message) -> None:
 async def rank_command(ctx: commands.Context):
     guild = ctx.guild
     if guild is None:
-        await ctx.reply("서버에서만 사용할 수 있어.", mention_author=False)
+        await ctx.reply("해당 명령어는 서버에서만 사용 가능하옵니다.", mention_author=False)
         return
 
     await finalize_previous_period_if_needed(guild, ctx.channel)
@@ -599,7 +599,7 @@ async def rank_command(ctx: commands.Context):
     rows = get_period_leaderboard(guild.id, period_key, 10)
 
     if not rows:
-        await ctx.reply("현재 3일 시즌 기록이 없어.", mention_author=False)
+        await ctx.reply("현재 3일 시즌에 반영된 기록이 존재하지 않사옵니다.", mention_author=False)
         return
 
     medal = {1: "🥇", 2: "🥈", 3: "🥉"}
@@ -624,7 +624,7 @@ async def rank_command(ctx: commands.Context):
 async def my_score_command(ctx: commands.Context):
     guild = ctx.guild
     if guild is None:
-        await ctx.reply("서버에서만 사용할 수 있어.", mention_author=False)
+        await ctx.reply("해당 명령어는 서버에서만 사용 가능하옵니다.", mention_author=False)
         return
 
     await finalize_previous_period_if_needed(guild, ctx.channel)
@@ -633,7 +633,7 @@ async def my_score_command(ctx: commands.Context):
     rank, row = get_period_user_rank(guild.id, ctx.author.id, period_key)
 
     if row is None:
-        await ctx.reply("현재 3일 시즌에 반영된 기록이 없어.", mention_author=False)
+        await ctx.reply("현재 3일 시즌에 반영된 기록이 존재하지 않사옵니다.", mention_author=False)
         return
 
     avg = row["avg_success_attempt"] if row["avg_success_attempt"] is not None else "-"

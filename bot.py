@@ -699,27 +699,32 @@ async def on_ready():
 
 
 @bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
+async def on_ready():
+    print(f"{bot.user} 로그인 완료", flush=True)
 
-    guild = message.guild
-    if guild is None:
-        return
-
-    if guild.id != GUILD_ID:
-        return
-
-    await bot.process_commands(message)
-    await handle_auto_collect(message)
+    guild = bot.get_guild(GUILD_ID)
+    if guild:
+        print(f"대상 서버: {guild.name}", flush=True)
+    else:
+        print("GUILD_ID에 해당하는 서버를 찾지 못함", flush=True)
 
 
 async def main():
+    print("main() 시작", flush=True)
     init_db()
+    print("DB 초기화 완료", flush=True)
+
     runner = await start_web_server()
+    print("웹서버 시작 완료", flush=True)
+
     try:
+        print("디스코드 로그인 시도", flush=True)
         await bot.start(TOKEN)
+    except Exception as e:
+        print(f"디스코드 로그인 에러: {e}", flush=True)
+        raise
     finally:
+        print("runner cleanup", flush=True)
         await runner.cleanup()
 
 

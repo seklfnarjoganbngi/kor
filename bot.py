@@ -1,14 +1,14 @@
 import os
 import re
 import sqlite3
-import threading
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from aiohttp import web
 
 load_dotenv()
 
@@ -35,35 +35,28 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"Bot is running!")
 
-    def log_message(self, format, *args):
-        return
+async def handle_root(request: web.Request):
+    return web.Response(text="Bot is running!")
 
 
-def run_web():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"HTTP server running on 0.0.0.0:{PORT}")
-    server.serve_forever()
+async def handle_healthz(request: web.Request):
+    return web.Response(text="ok")
 
 
-@app.route("/")
-def home():
-    return "Bot is running!", 200
+async def start_web_server():
+    web_app = web.Application()
+    web_app.router.add_get("/", handle_root)
+    web_app.router.add_get("/healthz", handle_healthz)
 
+    runner = web.AppRunner(web_app)
+    await runner.setup()
 
-@app.route("/healthz")
-def healthz():
-    return "ok", 200
+    site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
+    await site.start()
 
-
-def run_web():
-    app.run(host="0.0.0.0", port=PORT)
+    print(f"Web server running on 0.0.0.0:{PORT}", flush=True)
+    return runner
 
 
 def now_kst() -> datetime:
@@ -232,7 +225,6 @@ def parse_kordle_message(content: str):
         counts = count_tokens_in_line(line)
         total = counts["yellow"] + counts["green"] + counts["white"]
 
-        # 보드 줄은 최소 4칸 이상
         if total >= 4:
             board_lines.append(
                 {
@@ -254,7 +246,6 @@ def parse_kordle_message(content: str):
     total_green = sum(line["green"] for line in board_lines)
     total_white = sum(line["white"] for line in board_lines)
 
-    # 점수 규칙: 노랑 1점, 초록 2점
     score = total_yellow + (total_green * 2)
 
     success_attempt = None
@@ -403,9 +394,6 @@ def get_period_leaderboard(guild_id: int, period_key: str, limit: int = 10):
             user_id,
             username,
             SUM(score) AS total_score,
-            SUM(yellow_count) AS total_yellow,
-            SUM(green_count) AS total_green,
-            SUM(white_count) AS total_white,
             SUM(is_success) AS success_count,
             COUNT(*) - SUM(is_success) AS fail_count,
             COUNT(*) AS total_submissions,
@@ -443,9 +431,6 @@ def get_period_user_rank(guild_id: int, user_id: int, period_key: str):
             user_id,
             username,
             SUM(score) AS total_score,
-            SUM(yellow_count) AS total_yellow,
-            SUM(green_count) AS total_green,
-            SUM(white_count) AS total_white,
             SUM(is_success) AS success_count,
             COUNT(*) - SUM(is_success) AS fail_count,
             COUNT(*) AS total_submissions,
@@ -527,18 +512,15 @@ async def finalize_previous_period_if_needed(
     last_seen_period = get_meta(guild.id, "current_period")
     last_finalized_period = get_meta(guild.id, "last_finalized_period")
 
-    # 첫 실행
     if last_seen_period is None:
         set_meta(guild.id, "current_period", current_period)
         return
 
-    # 아직 같은 시즌
     if last_seen_period == current_period:
         return
 
     previous_period = last_seen_period
 
-    # 이미 마감된 시즌 중복 방지
     if last_finalized_period == previous_period:
         set_meta(guild.id, "current_period", current_period)
         return
@@ -573,7 +555,6 @@ async def handle_auto_collect(message: discord.Message) -> None:
     if guild is None:
         return
 
-    # 시즌이 바뀌었으면 지난 시즌 먼저 마감
     await finalize_previous_period_if_needed(guild, message.channel)
 
     parsed = parse_kordle_message(message.content)
@@ -621,11 +602,7 @@ async def rank_command(ctx: commands.Context):
         await ctx.reply("현재 3일 시즌 기록이 없어.", mention_author=False)
         return
 
-    medal = {
-        1: "🥇",
-        2: "🥈",
-        3: "🥉",
-    }
+    medal = {1: "🥇", 2: "🥈", 3: "🥉"}
 
     lines = [
         "```",
@@ -737,11 +714,14 @@ async def on_message(message: discord.Message):
     await handle_auto_collect(message)
 
 
-def main():
+async def main():
     init_db()
-    threading.Thread(target=run_web, daemon=True).start()
-    bot.run(TOKEN)
+    runner = await start_web_server()
+    try:
+        await bot.start(TOKEN)
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

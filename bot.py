@@ -682,6 +682,15 @@ async def help_command(ctx: commands.Context):
         ),
         mention_author=False,
     )
+    
+@bot.command(name="테스트킹")
+async def test_king(ctx):
+    guild = ctx.guild
+    if guild is None:
+        return
+
+    success, msg = await apply_king_role(guild, ctx.author.id)
+    await ctx.reply(f"테스트 결과: {msg}")
 
 
 @bot.event
